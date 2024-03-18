@@ -1,0 +1,49 @@
+USE [Lumber]
+GO
+/****** Object:  StoredProcedure [dbo].[CreateStatementDataOneCustomer]    Script Date: 3/18/2024 4:24:36 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[CreateStatementDataOneCustomer] 
+
+
+@statementDate  date,
+@custno         integer
+
+AS
+
+declare 
+        @statementStart date,
+        @over30         date
+        
+set @statementStart = dateAdd(dd, -30, @statementDate)
+set @over30         = dateAdd(dd, -30, @statementStart)
+
+select I.invoiceNumber, I.ID, I.ob_BillTo_RID as custno, I.dateEntered, ISNULL(I.dateShipped, I.dateEntered) as dateShipped,
+I.dateLastPayment, I.subTotal, I.salesTax, I.subTotal + I.salesTax as invoiceTotal, 
+I.totalPaid, I.totalDiscount + I.totalCredit as totalCreditAndDiscount, I.balance,
+I.dueDate, I.discountDate, T.discountPct, ROUND(I.subTotal * T.discountPct * 0.01,2) as discountAmount,
+Z.currentDue, Z.over30, Z.over60, 
+R.name, R.add1, R.add2, R.city, R.state, R.zip, financeCharge
+
+from Invoices I inner join CustomerRelations R on I.ob_BillTo_RID = R.ID
+left outer join Terms T on R.whseTerms_RID = T.ID
+
+left outer join (select I.ob_BillTo_RID as custno,
+    ROUND(sum(case when dueDate >= @statementDate or I.balance <= 0 then 0 
+        else (1 + datediff(mm, dueDate, @statementDate)) * 0.015 * I.balance end),2) as financeCharge,
+    ROUND(sum(case when dueDate >= @statementDate then I.balance else 0 end), 2) as currentDue,
+    ROUND(sum(case when dueDate >= @statementStart and dueDate < @statementDate then I.balance else 0 end), 2) as over30,
+    ROUND(sum(case when dueDate is null OR dueDate < @statementStart then I.balance else 0 end), 2) as over60
+
+    from Invoices I inner join CustomerRelations R on I.ob_BillTo_RID = R.ID
+    where  I.balance <> 0 
+    group by I.ob_BillTo_RID) as Z on I.ob_BillTo_RID = Z.custno
+
+where I.ob_BillTo_RID = @custno AND
+ (I.balance <> 0 or  I.dateLastPayment > @statementStart)
+AND currentDue + over30 + over60 > 0
+
+order by I.ob_BillTo_RID, I.dueDate
+GO
